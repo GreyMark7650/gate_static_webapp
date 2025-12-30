@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wayfinder Remote Gate Console (Static)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <main class="page">
+        <section class="auth-overlay" id="auth-overlay">
+            <div class="auth-card">
+                <h2>Unlock Controls</h2>
+                <p>Enter the passphrase to enable remote gate commands.</p>
+                <form id="auth-form">
+                    <input type="password" id="auth-passphrase" placeholder="Passphrase" autocomplete="current-password" required>
+                    <button type="submit">Unlock</button>
+                    <p class="auth-status" id="auth-status"></p>
+                </form>
+            </div>
+        </section>
+
+        <header class="hero">
+            <div>
+                <p class="eyebrow">Wayfinder Gate · MQTT Direct</p>
+                <h1>Hosted Gate Console</h1>
+                <p class="subtitle">Pure HTML/JS client that connects to the remote MQTT broker over WebSockets (flespi friendly).</p>
+            </div>
+            <div class="hero-state">
+                <p class="label">Gate State</p>
+                <p class="value" id="gate-state">unknown</p>
+                <p class="timestamp" id="last-update">Awaiting telemetry…</p>
+            </div>
+        </header>
+
+        <section class="controls">
+            <button class="action" data-action="open">Open Gate</button>
+            <button class="action" data-action="close">Close Gate</button>
+            <button class="action ghost" data-action="toggle">Toggle Pulse</button>
+        </section>
+
+        <section class="input-grid">
+            <article class="input-card" data-input="bell">
+                <p class="label">Bell</p>
+                <p class="value" id="bell-state">--</p>
+                <p class="hint">Topic · gate/input/bell</p>
+            </article>
+            <article class="input-card" data-input="lock">
+                <p class="label">Lock</p>
+                <p class="value" id="lock-state">--</p>
+                <p class="hint">Topic · gate/input/lock</p>
+            </article>
+            <article class="input-card" data-input="state">
+                <p class="label">State</p>
+                <p class="value" id="state-state">--</p>
+                <p class="hint">Topic · gate/input/state</p>
+            </article>
+            <article class="input-card" data-input="car">
+                <p class="label">Car</p>
+                <p class="value" id="car-state">--</p>
+                <p class="hint">Topic · gate/input/car</p>
+            </article>
+        </section>
+
+        <section class="log" id="event-log">
+            <p class="label">Event Stream</p>
+            <ul></ul>
+        </section>
+    </main>
+
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- Copy js/config.sample.js to js/config.js and fill in your token before deploying -->
+    <script src="js/config.js"></script>
+    <script src="js/app.js" defer></script>
+</body>
+</html>
