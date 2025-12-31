@@ -1,0 +1,11 @@
+# Basic Apache config for the static gate web app
+# Modify as needed for redirects or authentication.
+
+Options -Indexes
+DirectoryIndex index.html
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
