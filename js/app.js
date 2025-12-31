@@ -11,119 +11,280 @@ const stateStore = {
     last_update: null,
 };
 
-const logList = document.querySelector('#event-log ul');
-const gateStateEl = document.getElementById('gate-state');
-const lastUpdateEl = document.getElementById('last-update');
 const inputElements = {
     bell: document.getElementById('bell-state'),
     lock: document.getElementById('lock-state'),
     state: document.getElementById('state-state'),
     car: document.getElementById('car-state'),
 };
+const logList = document.querySelector('#event-log ul');
+const gateStateEl = document.getElementById('gate-state');
+const lastUpdateEl = document.getElementById('last-update');
+const overlay = document.getElementById('auth-overlay');
+const authForm = document.getElementById('auth-form');
+const authStatus = document.getElementById('auth-status');
+const sessionUserEl = document.getElementById('session-user');
+const sessionRoleEl = document.getElementById('session-role');
+const logoutBtn = document.getElementById('logout-btn');
 
-let mqttClient = null;
-let authorized = false;
-let currentConfig = null;
+const SESSION_KEY = 'gateRemoteSession';
+let session = null;
+let eventSource = null;
+let sseRetryTimer = null;
 
-function ensureConfig() {
-    if (!window.GATE_REMOTE_CONFIG) {
-        throw new Error('GATE_REMOTE_CONFIG missing. Copy js/config.sample.js to js/config.js and fill in your broker/token.');
-    }
-    const cfg = window.GATE_REMOTE_CONFIG;
-    if (!cfg.brokerUrl || !cfg.username) {
-        throw new Error('GATE_REMOTE_CONFIG must include brokerUrl and username.');
-    }
-    return cfg;
+document.addEventListener('DOMContentLoaded', () => {
+    wireAuth();
+    wireControls();
+    resumeSession();
+});
+
+function wireAuth() {
+    authForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const username = document.getElementById('auth-username').value.trim();
+        const password = document.getElementById('auth-password').value;
+        if (!username || !password) {
+            setAuthStatus('Username and password are required');
+            return;
+        }
+        setAuthStatus('Signing in…');
+        try {
+            const data = await login(username, password);
+            applySession(data);
+            document.getElementById('auth-username').value = '';
+            document.getElementById('auth-password').value = '';
+            hideOverlay();
+            bootstrapAfterAuth();
+        } catch (err) {
+            setAuthStatus(err.message || 'Unable to sign in');
+        }
+    });
+
+    logoutBtn.addEventListener('click', () => {
+        appendLog('Signing out');
+        teardownSession('Signed out');
+    });
 }
 
-function connectToBroker(cfg) {
-    currentConfig = cfg;
-    const clientId = `${cfg.clientId || 'wayfinder-web'}-${Math.random().toString(16).slice(2, 8)}`;
-    const options = {
-        username: cfg.username,
-        password: cfg.password || undefined,
-        keepalive: cfg.keepalive ?? 60,
-        reconnectPeriod: cfg.reconnectPeriod ?? 2000,
-        clean: true,
-    };
-    appendLog(`connecting → ${cfg.brokerUrl}`);
-    mqttClient = mqtt.connect(cfg.brokerUrl, { ...options, clientId });
-
-    mqttClient.on('connect', () => {
-        appendLog('connected to MQTT');
-        subscribeToTopics(cfg);
-    });
-
-    mqttClient.on('reconnect', () => {
-        appendLog('reconnecting…');
-    });
-
-    mqttClient.on('error', (err) => {
-        appendLog(`error: ${err.message}`);
-    });
-
-    mqttClient.on('message', (topic, payload) => {
-        handleMessage(cfg, topic, payload.toString());
-    });
-}
-
-function subscribeToTopics(cfg) {
-    const topics = new Set();
-    Object.values(cfg.topics.inputs || {}).forEach((topic) => topics.add(topic));
-    [cfg.topics.gateState, cfg.topics.gateMotion, cfg.topics.status].forEach((topic) => {
-        if (topic) topics.add(topic);
-    });
-
-    topics.forEach((topic) => {
-        mqttClient.subscribe(topic, (err) => {
-            if (err) {
-                appendLog(`subscribe failed → ${topic}`);
-            } else {
-                appendLog(`subscribed → ${topic}`);
-            }
+function wireControls() {
+    document.querySelectorAll('.action').forEach((button) => {
+        button.disabled = true;
+        button.addEventListener('click', async () => {
+            const action = button.dataset.action;
+            await triggerGateAction(action, button);
         });
     });
 }
 
-function handleMessage(cfg, topic, payload) {
-    const match = resolveTopic(cfg, topic);
-    const timestamp = Date.now() / 1000;
-    if (!match) {
-        appendLog(`message (${topic}) ${payload}`);
+function resumeSession() {
+    const stored = window.sessionStorage.getItem(SESSION_KEY);
+    if (!stored) {
+        showOverlay();
         return;
     }
-
-    if (match.type === 'input') {
-        const logical = payload.toLowerCase ? ['1', 'true', 'high', 'on'].includes(payload.toLowerCase()) : Boolean(Number(payload));
-        stateStore.inputs[match.input] = logical;
-        updateInputCard(match.input, logical);
-        stateStore.last_update = timestamp;
-    } else if (match.type === 'gate_state') {
-        updateGateState(payload || 'unknown');
-        stateStore.last_update = timestamp;
-    } else if (match.type === 'status') {
-        appendLog(`status → ${payload}`);
+    try {
+        const parsed = JSON.parse(stored);
+        if (!parsed?.token) {
+            throw new Error('invalid');
+        }
+        applySession(parsed, { silent: true });
+        hideOverlay();
+        bootstrapAfterAuth();
+    } catch (_err) {
+        window.sessionStorage.removeItem(SESSION_KEY);
+        showOverlay();
     }
-    updateTimestamp(stateStore.last_update);
 }
 
-function resolveTopic(cfg, topic) {
-    const inputs = cfg.topics.inputs || {};
-    for (const [name, t] of Object.entries(inputs)) {
-        if (t === topic) {
-            return { type: 'input', input: name };
+function applySession(data, options = {}) {
+    session = {
+        token: data.token,
+        role: data.role,
+        username: data.username,
+        expiresAt: data.expiresAt,
+    };
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    updateSessionUI();
+    updateControlAvailability();
+    if (!options.silent) {
+        appendLog(`Signed in as ${session.username} (${session.role})`);
+    }
+}
+
+function teardownSession(message) {
+    stopEventStream();
+    session = null;
+    window.sessionStorage.removeItem(SESSION_KEY);
+    updateSessionUI();
+    updateControlAvailability();
+    showOverlay();
+    setAuthStatus(message || 'Session ended');
+}
+
+function updateSessionUI() {
+    if (session) {
+        sessionUserEl.textContent = session.username;
+        sessionRoleEl.textContent = session.role;
+        sessionRoleEl.dataset.role = session.role;
+    } else {
+        sessionUserEl.textContent = 'Offline';
+        sessionRoleEl.textContent = 'no access';
+        sessionRoleEl.dataset.role = 'none';
+    }
+}
+
+function updateControlAvailability() {
+    const isAdmin = session?.role === 'admin';
+    document.querySelectorAll('.action').forEach((button) => {
+        button.disabled = !isAdmin;
+    });
+}
+
+async function bootstrapAfterAuth() {
+    try {
+        await fetchSnapshot();
+    } catch (err) {
+        appendLog(err.message || 'Failed to load snapshot');
+    }
+    startEventStream();
+}
+
+async function login(username, password) {
+    const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+    });
+    if (!response.ok) {
+        const body = await safeJson(response);
+        const message = body?.error || 'Invalid credentials';
+        throw new Error(message);
+    }
+    return response.json();
+}
+
+async function fetchSnapshot() {
+    const response = await fetchWithAuth('/api/state');
+    const snapshot = await response.json();
+    applySnapshot(snapshot);
+}
+
+function startEventStream() {
+    stopEventStream();
+    if (!session?.token) return;
+    const url = `/events?token=${encodeURIComponent(session.token)}`;
+    eventSource = new EventSource(url);
+    eventSource.onmessage = (event) => {
+        const payload = JSON.parse(event.data || '{}');
+        if (!payload) return;
+        if (payload.ts) updateTimestamp(payload.ts);
+        switch (payload.type) {
+            case 'snapshot':
+                applySnapshot(payload.state);
+                break;
+            case 'input':
+                updateInputCard(payload.input, payload.value);
+                break;
+            case 'gate_state':
+                updateGateState(payload.value);
+                break;
+            case 'status':
+                appendLog(`status → ${payload.value}`);
+                break;
+            default:
         }
+    };
+
+    eventSource.onerror = async () => {
+        appendLog('Event stream interrupted — retrying…');
+        stopEventStream();
+        try {
+            await fetchSnapshot();
+        } catch (_err) {
+            // fetchSnapshot already triggers auth handling
+        }
+        sseRetryTimer = window.setTimeout(() => startEventStream(), 2500);
+    };
+}
+
+function stopEventStream() {
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
     }
-    if (cfg.topics.gateState === topic || cfg.topics.gateMotion === topic) {
-        return { type: 'gate_state' };
+    if (sseRetryTimer) {
+        window.clearTimeout(sseRetryTimer);
+        sseRetryTimer = null;
     }
-    if (cfg.topics.status === topic) {
-        return { type: 'status' };
+}
+
+async function triggerGateAction(action, button) {
+    if (!session) {
+        appendLog('Sign in required');
+        return;
     }
-    return null;
+    if (session.role !== 'admin') {
+        appendLog('Admin role required for gate commands');
+        return;
+    }
+    button.disabled = true;
+    try {
+        const response = await fetchWithAuth('/api/gate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action }),
+        });
+        if (!response.ok) {
+            const body = await safeJson(response);
+            throw new Error(body?.error || 'Command failed');
+        }
+        appendLog(`command → ${action}`);
+    } catch (err) {
+        appendLog(err.message || 'Command failed');
+    } finally {
+        button.disabled = false;
+        updateControlAvailability();
+    }
+}
+
+async function fetchWithAuth(path, options = {}) {
+    if (!session?.token) {
+        throw new Error('Not authenticated');
+    }
+    const headers = new Headers(options.headers || {});
+    headers.set('Authorization', `Bearer ${session.token}`);
+    const init = { ...options, headers };
+    const response = await fetch(path, init);
+    if (response.status === 401) {
+        handleAuthFailure('Session expired');
+        throw new Error('Session expired');
+    }
+    if (response.status === 403) {
+        throw new Error('Insufficient permissions');
+    }
+    return response;
+}
+
+function handleAuthFailure(message) {
+    appendLog(message);
+    teardownSession(message);
+}
+
+function applySnapshot(snapshot) {
+    if (!snapshot) return;
+    Object.entries(snapshot.inputs || {}).forEach(([name, value]) => {
+        updateInputCard(name, Boolean(value));
+    });
+    if (snapshot.gate_state) {
+        updateGateState(snapshot.gate_state);
+    }
+    if (snapshot.last_update) {
+        updateTimestamp(snapshot.last_update);
+    }
 }
 
 function updateInputCard(name, value) {
+    stateStore.inputs[name] = value;
     const element = inputElements[name];
     if (!element) return;
     element.textContent = value ? 'ON' : 'OFF';
@@ -146,6 +307,7 @@ function updateTimestamp(unixSeconds) {
         lastUpdateEl.textContent = 'Awaiting telemetry…';
         return;
     }
+    stateStore.last_update = unixSeconds;
     const dt = new Date(unixSeconds * 1000);
     const formatted = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     lastUpdateEl.textContent = `Last signal ${formatted}`;
@@ -162,104 +324,23 @@ function appendLog(message) {
     }
 }
 
-function wireButtons(cfg) {
-    document.querySelectorAll('.action').forEach((button) => {
-        button.addEventListener('click', () => {
-            const action = button.dataset.action;
-            publishGateCommand(cfg, action, button);
-        });
-        button.disabled = true;
-    });
+function showOverlay() {
+    overlay.classList.remove('hidden');
 }
 
-function publishGateCommand(cfg, action, button) {
-    const commandMap = {
-        open: 'on',
-        close: 'off',
-        toggle: 'toggle',
-        pulse: 'toggle',
-    };
-    const payload = commandMap[action];
-    if (!payload) return;
-    if (!authorized) {
-        appendLog('Unlock required before sending commands');
-        return;
-    }
-    if (!mqttClient || mqttClient.disconnected) {
-        appendLog('Cannot send command: MQTT offline');
-        return;
-    }
-    button.disabled = true;
-    mqttClient.publish(cfg.topics.output, payload, (err) => {
-        button.disabled = false;
-        if (err) {
-            appendLog(`command error: ${err.message}`);
-        } else {
-            appendLog(`command → ${action}`);
-        }
-    });
+function hideOverlay() {
+    overlay.classList.add('hidden');
+    setAuthStatus('');
 }
 
-(async function init() {
+function setAuthStatus(message) {
+    authStatus.textContent = message || '';
+}
+
+async function safeJson(response) {
     try {
-        const cfg = ensureConfig();
-        await setupAuthOverlay(cfg);
-        wireButtons(cfg);
-        connectToBroker(cfg);
-    } catch (err) {
-        alert(err.message);
-        console.error(err);
+        return await response.json();
+    } catch (_err) {
+        return null;
     }
-})();
-
-async function setupAuthOverlay(cfg) {
-    const overlay = document.getElementById('auth-overlay');
-    const form = document.getElementById('auth-form');
-    const status = document.getElementById('auth-status');
-    if (!cfg.commandSecretHash) {
-        overlay.classList.add('hidden');
-        authorized = true;
-        document.querySelectorAll('.action').forEach((btn) => (btn.disabled = false));
-        return;
-    }
-    const cached = window.localStorage.getItem('gateAuthHash');
-    if (cached && cached === cfg.commandSecretHash) {
-        overlay.classList.add('hidden');
-        authorized = true;
-        document.querySelectorAll('.action').forEach((btn) => (btn.disabled = false));
-        return;
-    }
-    form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        status.textContent = 'Checking…';
-        const input = document.getElementById('auth-passphrase');
-        const hash = await sha256Hex(input.value || '');
-        if (hash === cfg.commandSecretHash) {
-            authorized = true;
-            overlay.classList.add('hidden');
-            document.querySelectorAll('.action').forEach((btn) => (btn.disabled = false));
-            window.localStorage.setItem('gateAuthHash', hash);
-            status.textContent = '';
-            input.value = '';
-            appendLog('Controls unlocked');
-        } else {
-            status.textContent = 'Wrong passphrase';
-            input.value = '';
-        }
-    });
-}
-
-async function sha256Hex(text) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(text);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function resetAuth() {
-    authorized = false;
-    window.localStorage.removeItem('gateAuthHash');
-    document.getElementById('auth-overlay').classList.remove('hidden');
-    document.querySelectorAll('.action').forEach((btn) => (btn.disabled = true));
 }

@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Wayfinder Remote Gate Console (Static)</title>
+    <title>Wayfinder Remote Gate Console</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
@@ -13,21 +13,33 @@
     <main class="page">
         <section class="auth-overlay" id="auth-overlay">
             <div class="auth-card">
-                <h2>Unlock Controls</h2>
-                <p>Enter the passphrase to enable remote gate commands.</p>
+                <h2>Sign In</h2>
+                <p>Use your assigned credentials to monitor and control the gate.</p>
                 <form id="auth-form">
-                    <input type="password" id="auth-passphrase" placeholder="Passphrase" autocomplete="current-password" required>
-                    <button type="submit">Unlock</button>
+                    <input type="text" id="auth-username" placeholder="Username" autocomplete="username" required>
+                    <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password" required>
+                    <button type="submit">Sign In</button>
                     <p class="auth-status" id="auth-status"></p>
                 </form>
             </div>
         </section>
 
+        <header class="session-bar">
+            <div>
+                <p class="session-label">Signed in as</p>
+                <p class="session-user" id="session-user">Offline</p>
+            </div>
+            <div class="session-role">
+                <span class="role-chip" id="session-role">no access</span>
+                <button class="text-button" id="logout-btn" type="button">Sign out</button>
+            </div>
+        </header>
+
         <header class="hero">
             <div>
-                <p class="eyebrow">Wayfinder Gate · MQTT Direct</p>
+                <p class="eyebrow">Wayfinder Gate · Secure Relay</p>
                 <h1>Hosted Gate Console</h1>
-                <p class="subtitle">Pure HTML/JS client that connects to the remote MQTT broker over WebSockets (flespi friendly).</p>
+                <p class="subtitle">Authenticated client that streams telemetry via the remote relay service and keeps broker tokens on the server.</p>
             </div>
             <div class="hero-state">
                 <p class="label">Gate State</p>
@@ -71,9 +83,6 @@
         </section>
     </main>
 
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-    <!-- Copy js/config.sample.js to js/config.js and fill in your token before deploying -->
-    <script src="js/config.js"></script>
     <script src="js/app.js" defer></script>
 </body>
 </html>
