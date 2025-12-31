@@ -10,3 +10,5 @@ deployment:
         --exclude '.cpanel.yml'
       --exclude 'js/config.js'
         ./ $DEPLOYPATH/
+    - /bin/find $DEPLOYPATH -type d -exec chmod 755 {} \;
+    - /bin/find $DEPLOYPATH -type f -exec chmod 644 {} \;
