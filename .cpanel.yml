@@ -1,0 +1,11 @@
+---
+# Update DEPLOYPATH to your cPanel account's public web directory before running the deployment hook.
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home/tinternc/maingate.tinterncrafts.com
+    - /bin/mkdir -p $DEPLOYPATH
+    - >-
+        /bin/rsync -av --delete
+        --exclude '.git*'
+        --exclude '.cpanel.yml'
+        ./ $DEPLOYPATH/
