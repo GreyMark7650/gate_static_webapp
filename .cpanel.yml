@@ -2,14 +2,15 @@
 # Update DEPLOYPATH to your cPanel account's public web directory before running the deployment hook.
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/tinternc/maingate.tinterncrafts.com
-    - /bin/mkdir -p $DEPLOYPATH
-    - >-
-        /bin/rsync -av --delete
-        --exclude '.git*'
-        --exclude '.cpanel.yml'
-      --exclude 'js/config.js'
-        --exclude '.htaccess'
-        ./ $DEPLOYPATH/
-    - /bin/find $DEPLOYPATH -type d -exec chmod 755 {} \;
-    - /bin/find $DEPLOYPATH -type f -exec chmod 644 {} \;
+    - |
+        set -e
+        DEPLOYPATH="/home/tinternc/maingate.tinterncrafts.com"
+        /bin/mkdir -p "$DEPLOYPATH"
+        /bin/rsync -av --delete \
+          --exclude '.git*' \
+          --exclude '.cpanel.yml' \
+          --exclude 'js/config.js' \
+          --exclude '.htaccess' \
+          ./ "$DEPLOYPATH"/
+        /bin/find "$DEPLOYPATH" -type d -exec chmod 755 {} \;
+        /bin/find "$DEPLOYPATH" -type f -exec chmod 644 {} \;
